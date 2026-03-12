@@ -1,0 +1,6 @@
+.env.local
+data/butterfly.db
+data/butterfly.db-wal
+data/butterfly.db-shm
+.next
+node_modules
