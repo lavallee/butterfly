@@ -6,6 +6,7 @@ import type {
   Annotation,
   Evidence,
   GraphState,
+  ActivityEvent,
 } from "@/types";
 
 const DB_PATH = path.join(process.cwd(), "data", "butterfly.db");
@@ -31,6 +32,7 @@ function initSchema(db: Database.Database) {
       probability REAL NOT NULL DEFAULT 0.5,
       confidence REAL NOT NULL DEFAULT 0.1,
       summary TEXT,
+      critique TEXT,
       evidence TEXT NOT NULL DEFAULT '[]',
       depth INTEGER NOT NULL DEFAULT 0,
       priority_score REAL NOT NULL DEFAULT 0,
@@ -63,7 +65,22 @@ function initSchema(db: Database.Database) {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS activity_log (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      node_id TEXT,
+      detail TEXT NOT NULL,
+      timestamp TEXT NOT NULL
+    );
   `);
+
+  // Migrations for existing DBs
+  try { db.exec("ALTER TABLE nodes ADD COLUMN critique TEXT"); } catch {}
+  try { db.exec("ALTER TABLE nodes ADD COLUMN entities TEXT NOT NULL DEFAULT '[]'"); } catch {}
+  try { db.exec(`CREATE TABLE IF NOT EXISTS activity_log (
+    id TEXT PRIMARY KEY, type TEXT NOT NULL, node_id TEXT, detail TEXT NOT NULL, timestamp TEXT NOT NULL
+  )`); } catch {}
 }
 
 // ---- Node operations ----
@@ -83,12 +100,12 @@ export function getNode(id: string): QuestionNode | null {
 export function upsertNode(node: QuestionNode): void {
   const db = getDb();
   db.prepare(`
-    INSERT INTO nodes (id, question, status, probability, confidence, summary, evidence, depth, priority_score, position_x, position_y, created_at, updated_at, researched_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO nodes (id, question, status, probability, confidence, summary, critique, evidence, entities, depth, priority_score, position_x, position_y, created_at, updated_at, researched_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       question=excluded.question, status=excluded.status, probability=excluded.probability,
-      confidence=excluded.confidence, summary=excluded.summary, evidence=excluded.evidence,
-      depth=excluded.depth, priority_score=excluded.priority_score,
+      confidence=excluded.confidence, summary=excluded.summary, critique=excluded.critique,
+      evidence=excluded.evidence, entities=excluded.entities, depth=excluded.depth, priority_score=excluded.priority_score,
       position_x=excluded.position_x, position_y=excluded.position_y,
       updated_at=excluded.updated_at, researched_at=excluded.researched_at
   `).run(
@@ -98,7 +115,9 @@ export function upsertNode(node: QuestionNode): void {
     node.probability,
     node.confidence,
     node.summary,
+    node.critique,
     JSON.stringify(node.evidence),
+    JSON.stringify(node.entities),
     node.depth,
     node.priority_score,
     node.position.x,
@@ -204,7 +223,9 @@ function rowToNode(row: any): QuestionNode {
     probability: row.probability,
     confidence: row.confidence,
     summary: row.summary,
+    critique: row.critique || null,
     evidence: JSON.parse(row.evidence),
+    entities: JSON.parse(row.entities || "[]"),
     depth: row.depth,
     priority_score: row.priority_score,
     position: { x: row.position_x, y: row.position_y },
@@ -212,4 +233,43 @@ function rowToNode(row: any): QuestionNode {
     updated_at: row.updated_at,
     researched_at: row.researched_at,
   };
+}
+
+// ---- Activity Log ----
+
+export function logActivity(
+  type: ActivityEvent["type"],
+  detail: string,
+  nodeId?: string
+): void {
+  const db = getDb();
+  const id = `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  db.prepare(
+    "INSERT INTO activity_log (id, type, node_id, detail, timestamp) VALUES (?, ?, ?, ?, ?)"
+  ).run(id, type, nodeId || null, detail, new Date().toISOString());
+}
+
+// ---- Synthesis Storage ----
+
+export function getSynthesisResult(): any | null {
+  const json = getEngineState("synthesis_result");
+  if (!json) return null;
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+export function setSynthesisResult(result: any): void {
+  setEngineState("synthesis_result", JSON.stringify(result));
+}
+
+// ---- Activity Log ----
+
+export function getActivityLog(limit = 100): ActivityEvent[] {
+  const db = getDb();
+  return db
+    .prepare("SELECT * FROM activity_log ORDER BY timestamp DESC LIMIT ?")
+    .all(limit) as ActivityEvent[];
 }

@@ -3,6 +3,30 @@
 import { useState } from "react";
 import type { QuestionNode } from "@/types";
 
+const ENTITY_BG: Record<string, string> = {
+  country: "#0f2a1f",
+  organization: "#1a1a2e",
+  person: "#2a1a0f",
+  commodity: "#2a2a0f",
+  policy: "#1a0f2a",
+};
+
+const ENTITY_BORDER: Record<string, string> = {
+  country: "#22c55e40",
+  organization: "#3b82f640",
+  person: "#f59e0b40",
+  commodity: "#eab30840",
+  policy: "#8b5cf640",
+};
+
+const ENTITY_COLOR: Record<string, string> = {
+  country: "#86efac",
+  organization: "#93c5fd",
+  person: "#fcd34d",
+  commodity: "#fde047",
+  policy: "#c4b5fd",
+};
+
 interface Props {
   node: QuestionNode | null;
   onClose: () => void;
@@ -111,6 +135,36 @@ export default function EvidencePanel({ node, onClose, onAnnotate }: Props) {
         </div>
       )}
 
+      {/* Critique */}
+      {node.critique && (
+        <div>
+          <h3
+            style={{
+              fontSize: 11,
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              color: "#737373",
+              marginBottom: 8,
+            }}
+          >
+            Critic Assessment
+          </h3>
+          <div
+            style={{
+              background: "#1a1a0a",
+              border: "1px solid #333300",
+              borderRadius: 6,
+              padding: "10px 12px",
+              fontSize: 13,
+              lineHeight: 1.6,
+              color: "#fcd34d",
+            }}
+          >
+            {node.critique}
+          </div>
+        </div>
+      )}
+
       {/* Evidence */}
       {node.evidence.length > 0 && (
         <div>
@@ -144,6 +198,40 @@ export default function EvidencePanel({ node, onClose, onAnnotate }: Props) {
                   </div>
                 )}
               </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Entities */}
+      {node.entities && node.entities.length > 0 && (
+        <div>
+          <h3
+            style={{
+              fontSize: 11,
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              color: "#737373",
+              marginBottom: 8,
+            }}
+          >
+            Entities ({node.entities.length})
+          </h3>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {node.entities.map((e, i) => (
+              <span
+                key={i}
+                style={{
+                  padding: "2px 8px",
+                  borderRadius: 12,
+                  fontSize: 11,
+                  background: ENTITY_BG[e.type] || "#1a1a1a",
+                  border: `1px solid ${ENTITY_BORDER[e.type] || "#333"}`,
+                  color: ENTITY_COLOR[e.type] || "#a3a3a3",
+                }}
+              >
+                {e.name}
+              </span>
             ))}
           </div>
         </div>

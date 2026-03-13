@@ -20,11 +20,15 @@ import dagre from "dagre";
 import QuestionNodeComponent from "./QuestionNode";
 import AnnotationNodeComponent from "./AnnotationNode";
 import EvidencePanel from "./EvidencePanel";
+import ActivityLog from "./ActivityLog";
+import BriefingPanel from "./BriefingPanel";
+import AnalysisPanel from "./AnalysisPanel";
 import type {
   GraphState,
   QuestionNode,
   Annotation,
   EngineStatus,
+  SynthesisResult,
 } from "@/types";
 
 const nodeTypes = {
@@ -87,10 +91,15 @@ function CanvasInner() {
   const [isRunning, setIsRunning] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [autoLayout, setAutoLayout] = useState(true);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [isSynthesizing, setIsSynthesizing] = useState(false);
+  const [synthesisResult, setSynthesisResult] = useState<SynthesisResult | null>(null);
+  const [briefingOpen, setBriefingOpen] = useState(false);
+  const [analysisOpen, setAnalysisOpen] = useState(false);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
   const prevNodeCountRef = useRef(0);
   const stopRef = useRef(false);
-  const { fitView } = useReactFlow();
+  const { fitView, setCenter } = useReactFlow();
 
   // Fetch graph state
   const fetchGraph = useCallback(async () => {
@@ -252,6 +261,25 @@ function CanvasInner() {
     }
   }, []);
 
+  // Focus a node from activity log
+  const handleNodeFocus = useCallback(
+    (nodeId: string) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+
+      // Select the node for the evidence panel
+      if (node.type === "question") {
+        setSelectedNode(node.data as QuestionNode);
+      }
+
+      // Zoom to the node
+      const x = node.position.x + NODE_WIDTH / 2;
+      const y = node.position.y + NODE_HEIGHT / 2;
+      setCenter(x, y, { zoom: 1.2, duration: 500 });
+    },
+    [nodes, setCenter]
+  );
+
   // Save position changes back to server
   const handleNodeDragStop = useCallback(async (_: any, node: Node) => {
     if (node.type === "question") {
@@ -278,6 +306,52 @@ function CanvasInner() {
       body: JSON.stringify({ node_id: nodeId, content, type }),
     });
     await fetchGraph();
+  };
+
+  // Synthesis
+  const handleSynthesize = async () => {
+    setIsSynthesizing(true);
+    try {
+      const res = await fetch("/api/synthesis", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const result: SynthesisResult = await res.json();
+      setSynthesisResult(result);
+      setBriefingOpen(true);
+    } catch (err) {
+      console.error("Synthesis failed:", err);
+    }
+    setIsSynthesizing(false);
+  };
+
+  const handleApplyEdges = async () => {
+    const res = await fetch("/api/synthesis", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "apply_edges" }),
+    });
+    const data = await res.json();
+    await fetchGraph();
+    // Update local synthesis result to clear proposed edges (prevent double-apply)
+    setSynthesisResult((prev) =>
+      prev ? { ...prev, proposed_edges: [], _edgesApplied: data.applied } as any : prev
+    );
+  };
+
+  const handleApplyAdjustments = async () => {
+    const res = await fetch("/api/synthesis", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "apply_adjustments" }),
+    });
+    const data = await res.json();
+    await fetchGraph();
+    // Update local synthesis result to mark adjustments applied
+    setSynthesisResult((prev) =>
+      prev ? { ...prev, _adjustmentsApplied: data.adjusted } as any : prev
+    );
   };
 
   // Compute stats from question nodes
@@ -350,6 +424,22 @@ function CanvasInner() {
           style={autoLayout ? btnAccentStyle : btnStyle}
         >
           Auto Layout
+        </button>
+        <div style={{ width: 1, height: 20, background: "#333", margin: "0 4px" }} />
+        <button
+          onClick={handleSynthesize}
+          disabled={isSynthesizing}
+          style={isSynthesizing ? { ...btnStyle, opacity: 0.5, cursor: "not-allowed" } : btnStyle}
+        >
+          {isSynthesizing ? "Synthesizing..." : "Synthesize"}
+        </button>
+        {synthesisResult?.status === "complete" && !briefingOpen && (
+          <button onClick={() => setBriefingOpen(true)} style={btnAccentStyle}>
+            View Briefing
+          </button>
+        )}
+        <button onClick={() => setAnalysisOpen(true)} style={btnStyle}>
+          Analysis
         </button>
         {/* Status indicator */}
         {isRunning && (
@@ -428,6 +518,22 @@ function CanvasInner() {
               {engineStatus && <span style={{ color: "#d4d4d4" }}>{engineStatus.cycles_completed} cycles</span>}
             </div>
           </div>
+          {engineStatus?.budget && (
+            <>
+              <div style={{ width: 1, background: "#262626" }} />
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <span style={{ color: "#525252", textTransform: "uppercase", letterSpacing: "0.05em", fontSize: 9 }}>
+                  Budget
+                </span>
+                <div style={{ display: "flex", gap: 12 }}>
+                  <span style={{ color: "#d4d4d4" }}>${engineStatus.budget.estimated_cost_usd.toFixed(4)}</span>
+                  {engineStatus.budget.budget_cap_usd && (
+                    <span style={{ color: "#737373" }}>/ ${engineStatus.budget.budget_cap_usd.toFixed(2)}</span>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -468,6 +574,35 @@ function CanvasInner() {
         onClose={() => setSelectedNode(null)}
         onAnnotate={handleAnnotate}
       />
+
+      <ActivityLog
+        isOpen={activityOpen}
+        onToggle={() => setActivityOpen((v) => !v)}
+        onNodeFocus={handleNodeFocus}
+      />
+
+      {analysisOpen && (
+        <AnalysisPanel
+          onClose={() => setAnalysisOpen(false)}
+          onNodeFocus={(nodeId) => {
+            setAnalysisOpen(false);
+            handleNodeFocus(nodeId);
+          }}
+        />
+      )}
+
+      {briefingOpen && synthesisResult && (
+        <BriefingPanel
+          result={synthesisResult}
+          onClose={() => setBriefingOpen(false)}
+          onApplyEdges={handleApplyEdges}
+          onApplyAdjustments={handleApplyAdjustments}
+          onNodeFocus={(nodeId) => {
+            setBriefingOpen(false);
+            handleNodeFocus(nodeId);
+          }}
+        />
+      )}
     </div>
   );
 }

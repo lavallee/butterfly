@@ -7,7 +7,9 @@ import {
   getChildEdges,
   getAllNodes,
   getAllEdges,
+  logActivity,
 } from "@/lib/db";
+import { isDuplicate } from "./dedup";
 
 /**
  * Create the initial root question for a scenario.
@@ -21,7 +23,9 @@ export function createRootNode(question: string): QuestionNode {
     probability: 0.5,
     confidence: 0.1,
     summary: null,
+    critique: null,
     evidence: [],
+    entities: [],
     depth: 0,
     priority_score: 1.0,
     position: { x: 0, y: 0 },
@@ -61,14 +65,18 @@ export function applyResearchResult(
   // Create follow-up question nodes
   const newNodes: QuestionNode[] = [];
   const newEdges: Edge[] = [];
-  const existingChildren = getChildEdges(nodeId);
-  const existingQuestions = new Set(
-    getAllNodes().map((n) => n.question.toLowerCase())
-  );
 
   for (const fq of result.follow_up_questions) {
-    // Skip if we already have a very similar question
-    if (existingQuestions.has(fq.question.toLowerCase())) continue;
+    // Duplicate detection
+    const dupCheck = isDuplicate(fq.question);
+    if (dupCheck.duplicate) {
+      logActivity(
+        "question_skipped_duplicate",
+        `Skipped "${fq.question.slice(0, 80)}..." (${(dupCheck.similarity! * 100).toFixed(0)}% similar to "${dupCheck.matchedQuestion?.slice(0, 60)}...")`,
+        nodeId
+      );
+      continue;
+    }
 
     const childNode: QuestionNode = {
       id: uuid(),
@@ -77,7 +85,9 @@ export function applyResearchResult(
       probability: fq.estimated_probability,
       confidence: 0.1,
       summary: null,
+      critique: null,
       evidence: [],
+      entities: [],
       depth: node.depth + 1,
       priority_score: 0,
       position: layoutChild(updatedNode, newNodes.length, result.follow_up_questions.length),
@@ -98,6 +108,7 @@ export function applyResearchResult(
     insertEdge(edge);
     newNodes.push(childNode);
     newEdges.push(edge);
+    logActivity("question_created", `"${fq.question.slice(0, 100)}" (${fq.relationship}, P=${fq.estimated_probability})`, childNode.id);
   }
 
   return { updatedNode, newNodes, newEdges };

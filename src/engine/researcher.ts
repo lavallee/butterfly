@@ -9,7 +9,7 @@ const client = new Anthropic();
  */
 export async function research(
   node: QuestionNode,
-  context: { ancestors: string[]; siblings: string[] }
+  context: { ancestors: string[]; siblings: string[]; keyFindings?: string }
 ): Promise<ResearchResult> {
   const response = await client.messages.create({
     model: "claude-sonnet-4-20250514",
@@ -33,6 +33,8 @@ ${context.ancestors.map((q, i) => `${i + 1}. ${q}`).join("\n") || "This is a roo
 
 **Sibling questions already being tracked:**
 ${context.siblings.map((q) => `- ${q}`).join("\n") || "None yet."}
+
+${context.keyFindings ? `**Key findings from other research branches:**\n${context.keyFindings}` : ""}
 
 Respond with a JSON object (no markdown fences) with this exact structure:
 {
@@ -68,6 +70,11 @@ Guidelines:
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
 
+  const tokenUsage = {
+    input: response.usage?.input_tokens || 0,
+    output: response.usage?.output_tokens || 0,
+  };
+
   try {
     const result = JSON.parse(text);
     return {
@@ -82,9 +89,9 @@ Guidelines:
       follow_up_questions: result.follow_up_questions || [],
       should_decompose: result.should_decompose || false,
       sub_questions: result.sub_questions || [],
+      token_usage: tokenUsage,
     };
   } catch {
-    // If JSON parsing fails, treat the whole response as a summary
     return {
       summary: text,
       evidence: [],
@@ -92,6 +99,7 @@ Guidelines:
       confidence: 0.1,
       follow_up_questions: [],
       should_decompose: false,
+      token_usage: tokenUsage,
     };
   }
 }

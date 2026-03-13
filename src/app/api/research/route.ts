@@ -43,10 +43,12 @@ export async function POST(req: Request) {
 
 // GET /api/research - engine status
 export async function GET() {
+  const { getBudgetState } = await import("@/engine/budget");
   return NextResponse.json({
     running: getEngineState("running") === "true",
     current_question_id: getEngineState("current_question_id") || null,
     cycles_completed: parseInt(getEngineState("cycles_completed") || "0"),
     last_cycle_at: getEngineState("last_cycle_at") || null,
+    budget: getBudgetState(),
   });
 }
