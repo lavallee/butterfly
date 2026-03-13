@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { QuestionNode, ResearchResult, Evidence } from "@/types";
+import type { QuestionNode, ResearchResult } from "@/types";
 
 const client = new Anthropic();
 
@@ -9,7 +9,7 @@ const client = new Anthropic();
  */
 export async function research(
   node: QuestionNode,
-  context: { ancestors: string[]; siblings: string[]; keyFindings?: string }
+  context: { ancestors: string[]; siblings: string[]; keyFindings?: string; baseRate?: number | null }
 ): Promise<ResearchResult> {
   const response = await client.messages.create({
     model: "claude-sonnet-4-20250514",
@@ -26,7 +26,7 @@ Current date: ${new Date().toISOString().split("T")[0]}`,
         role: "user",
         content: `Research the following question in the context of a cascading effects analysis:
 
-**Question:** ${node.question}
+**Question:** ${node.operationalized_question || node.question}
 
 **Context chain (ancestors):**
 ${context.ancestors.map((q, i) => `${i + 1}. ${q}`).join("\n") || "This is a root question."}
@@ -34,6 +34,7 @@ ${context.ancestors.map((q, i) => `${i + 1}. ${q}`).join("\n") || "This is a roo
 **Sibling questions already being tracked:**
 ${context.siblings.map((q) => `- ${q}`).join("\n") || "None yet."}
 
+${context.baseRate != null ? `**Reference Class Anchoring:**\nHistorical base rate: ${(context.baseRate * 100).toFixed(0)}%\nUse this as your starting anchor, then adjust based on inside-view evidence specific to this situation.\n` : ""}
 ${context.keyFindings ? `**Key findings from other research branches:**\n${context.keyFindings}` : ""}
 
 Respond with a JSON object (no markdown fences) with this exact structure:

@@ -1,4 +1,5 @@
 import type { QuestionNode, Edge, Annotation, PriorityFactors } from "@/types";
+import { computeVOI } from "./analysis/voi";
 
 /**
  * The value system for deciding what to research next.
@@ -8,12 +9,13 @@ import type { QuestionNode, Edge, Annotation, PriorityFactors } from "@/types";
  */
 
 const WEIGHTS = {
-  uncertainty: 0.25, // High uncertainty → high research value
-  impact: 0.25, // Many dependents → important to get right
-  novelty: 0.20, // Unexplored branches deserve attention
-  staleness: 0.10, // Re-research stale nodes
-  user_interest: 0.15, // User annotations signal importance
-  depth_penalty: 0.05, // Slight preference for breadth
+  uncertainty: 0.15,
+  impact: 0.15,
+  voi: 0.30, // Value of Information — dominant factor
+  novelty: 0.15,
+  staleness: 0.08,
+  user_interest: 0.12,
+  depth_penalty: 0.05,
 };
 
 export function scoreAllNodes(
@@ -24,11 +26,24 @@ export function scoreAllNodes(
   const openNodes = nodes.filter((n) => n.status === "open" || n.status === "stale");
   if (openNodes.length === 0) return [];
 
+  // Compute VOI scores upfront for all open nodes
+  const voiScores = new Map<string, number>();
+  try {
+    for (const node of openNodes) {
+      const voi = computeVOI(node.id, nodes, edges);
+      voiScores.set(node.id, voi.voi_score);
+    }
+  } catch {
+    // VOI computation is best-effort
+  }
+  const maxVOI = Math.max(...voiScores.values(), 0.001);
+
   const scored = openNodes.map((node) => {
-    const factors = computeFactors(node, nodes, edges, annotations);
+    const factors = computeFactors(node, nodes, edges, annotations, voiScores.get(node.id) || 0, maxVOI);
     const score =
       WEIGHTS.uncertainty * factors.uncertainty +
       WEIGHTS.impact * factors.impact +
+      WEIGHTS.voi * factors.voi +
       WEIGHTS.novelty * factors.novelty +
       WEIGHTS.staleness * factors.staleness +
       WEIGHTS.user_interest * factors.user_interest -
@@ -53,7 +68,9 @@ function computeFactors(
   node: QuestionNode,
   allNodes: QuestionNode[],
   edges: Edge[],
-  annotations: Annotation[]
+  annotations: Annotation[],
+  voiScore: number,
+  maxVOI: number
 ): PriorityFactors {
   // Uncertainty: inverse of confidence. Low confidence = high research value.
   const uncertainty = 1 - node.confidence;
@@ -89,9 +106,13 @@ function computeFactors(
   const maxDepth = Math.max(...allNodes.map((n) => n.depth), 1);
   const depth_penalty = node.depth / maxDepth;
 
+  // VOI: normalized value of information score
+  const voi = maxVOI > 0 ? voiScore / maxVOI : 0;
+
   return {
     uncertainty,
     impact,
+    voi,
     novelty,
     staleness,
     user_interest: interestScore,

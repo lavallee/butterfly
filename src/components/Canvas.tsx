@@ -23,6 +23,7 @@ import EvidencePanel from "./EvidencePanel";
 import ActivityLog from "./ActivityLog";
 import BriefingPanel from "./BriefingPanel";
 import AnalysisPanel from "./AnalysisPanel";
+import CalibrationPanel from "./CalibrationPanel";
 import type {
   GraphState,
   QuestionNode,
@@ -96,6 +97,7 @@ function CanvasInner() {
   const [synthesisResult, setSynthesisResult] = useState<SynthesisResult | null>(null);
   const [briefingOpen, setBriefingOpen] = useState(false);
   const [analysisOpen, setAnalysisOpen] = useState(false);
+  const [calibrationOpen, setCalibrationOpen] = useState(false);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
   const prevNodeCountRef = useRef(0);
   const stopRef = useRef(false);
@@ -354,6 +356,24 @@ function CanvasInner() {
     );
   };
 
+  // Resolve a question
+  const handleResolve = async (nodeId: string, resolvedAs: "yes" | "no" | "partial") => {
+    try {
+      const res = await fetch("/api/calibration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nodeId, resolved_as: resolvedAs }),
+      });
+      const updated = await res.json();
+      if (!updated.error) {
+        setSelectedNode(updated);
+        await fetchGraph();
+      }
+    } catch (err) {
+      console.error("Resolution failed:", err);
+    }
+  };
+
   // Compute stats from question nodes
   const questionNodes = nodes.filter((n) => n.type === "question");
   const stats = {
@@ -440,6 +460,9 @@ function CanvasInner() {
         )}
         <button onClick={() => setAnalysisOpen(true)} style={btnStyle}>
           Analysis
+        </button>
+        <button onClick={() => setCalibrationOpen(true)} style={btnStyle}>
+          Calibration
         </button>
         {/* Status indicator */}
         {isRunning && (
@@ -573,6 +596,8 @@ function CanvasInner() {
         node={selectedNode}
         onClose={() => setSelectedNode(null)}
         onAnnotate={handleAnnotate}
+        onResolve={handleResolve}
+        onNodeFocus={handleNodeFocus}
       />
 
       <ActivityLog
@@ -586,6 +611,16 @@ function CanvasInner() {
           onClose={() => setAnalysisOpen(false)}
           onNodeFocus={(nodeId) => {
             setAnalysisOpen(false);
+            handleNodeFocus(nodeId);
+          }}
+        />
+      )}
+
+      {calibrationOpen && (
+        <CalibrationPanel
+          onClose={() => setCalibrationOpen(false)}
+          onNodeFocus={(nodeId) => {
+            setCalibrationOpen(false);
             handleNodeFocus(nodeId);
           }}
         />

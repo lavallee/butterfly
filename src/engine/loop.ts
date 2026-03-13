@@ -6,6 +6,7 @@ import {
   getEngineState,
   setEngineState,
   logActivity,
+  recordBeliefUpdate,
 } from "@/lib/db";
 import { scoreAllNodes } from "./prioritizer";
 import { research } from "./researcher";
@@ -18,6 +19,8 @@ import {
   getSiblingQuestions,
 } from "./graph";
 import { propagate } from "./propagator";
+import { operationalize } from "./operationalizer";
+import { findBaseRate } from "./baserate";
 import type { QuestionNode } from "@/types";
 
 const CYCLE_DELAY_MS = 5000;
@@ -69,11 +72,30 @@ export async function runOneCycle(): Promise<{
   logActivity("research_started", `"${target.question.slice(0, 100)}"`, target.id);
 
   try {
+    // Operationalize if not already done
+    if (!target.operationalized_question) {
+      const opResult = await operationalize(target.question);
+      target.operationalized_question = opResult.operationalized_question;
+      target.resolution_criteria = opResult.resolution_criteria;
+      target.resolution_date = opResult.resolution_date;
+      upsertNode(target);
+      logActivity("research_started", `Operationalized: "${opResult.operationalized_question.slice(0, 100)}"`, target.id);
+    }
+
+    // Find base rate if not already done
+    if (target.base_rate === null) {
+      const brResult = await findBaseRate(target.operationalized_question || target.question);
+      target.base_rate = brResult.base_rate;
+      upsertNode(target);
+      logActivity("research_started", `Base rate: ${(brResult.base_rate * 100).toFixed(0)}% (${brResult.reference_class.slice(0, 80)})`, target.id);
+    }
+
     // Research with key findings context
     const context = {
       ancestors: getAncestorQuestions(target.id),
       siblings: getSiblingQuestions(target.id),
       keyFindings: getKeyFindings(),
+      baseRate: target.base_rate,
     };
     const result = await research(target, context);
 
@@ -117,6 +139,24 @@ export async function runOneCycle(): Promise<{
     updatedNode.critique = critiqueResult.critique;
     upsertNode(updatedNode);
 
+    // Record belief updates
+    recordBeliefUpdate(
+      target.id,
+      updatedNode.probability,
+      updatedNode.confidence,
+      "research",
+      `Research complete: P=${updatedNode.probability.toFixed(2)} C=${updatedNode.confidence.toFixed(2)}`
+    );
+    if (critiqueResult.adjusted_probability !== null || critiqueResult.adjusted_confidence !== null) {
+      recordBeliefUpdate(
+        target.id,
+        updatedNode.probability,
+        updatedNode.confidence,
+        "critic",
+        `Critic adjusted: ${critiqueResult.critique?.slice(0, 100) || "no detail"}`
+      );
+    }
+
     const duplicatesSkipped = result.follow_up_questions.length - newNodes.length;
 
     logActivity(
@@ -154,6 +194,17 @@ export async function runOneCycle(): Promise<{
       return orig && Math.abs(orig.probability - n.probability) > 0.01;
     });
     propagated.forEach((n) => upsertNode(n));
+
+    // Record belief updates for propagated nodes
+    for (const n of changed) {
+      recordBeliefUpdate(
+        n.id,
+        n.probability,
+        n.confidence,
+        "propagation",
+        `Propagated from "${target.question.slice(0, 60)}"`
+      );
+    }
 
     if (changed.length > 0) {
       logActivity(

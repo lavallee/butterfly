@@ -8,6 +8,9 @@ import {
   getAllNodes,
   getAllEdges,
   logActivity,
+  insertEvidence,
+  linkEvidenceToNode,
+  getEvidenceForNode,
 } from "@/lib/db";
 import { isDuplicate } from "./dedup";
 
@@ -29,6 +32,13 @@ export function createRootNode(question: string): QuestionNode {
     depth: 0,
     priority_score: 1.0,
     position: { x: 0, y: 0 },
+    operationalized_question: null,
+    resolution_criteria: null,
+    resolution_date: null,
+    resolved_at: null,
+    resolved_as: null,
+    brier_score: null,
+    base_rate: null,
     created_at: now,
     updated_at: now,
     researched_at: null,
@@ -49,6 +59,12 @@ export function applyResearchResult(
 
   const now = new Date().toISOString();
 
+  // Insert evidence into normalized tables and link to this node
+  for (const ev of result.evidence) {
+    const record = insertEvidence(ev.content, ev.source || null, ev.found_at);
+    linkEvidenceToNode(nodeId, record.id);
+  }
+
   // Update the researched node
   const updatedNode: QuestionNode = {
     ...node,
@@ -56,7 +72,7 @@ export function applyResearchResult(
     probability: result.probability_estimate,
     confidence: result.confidence,
     summary: result.summary,
-    evidence: [...node.evidence, ...result.evidence],
+    evidence: getEvidenceForNode(nodeId),
     updated_at: now,
     researched_at: now,
   };
@@ -91,6 +107,13 @@ export function applyResearchResult(
       depth: node.depth + 1,
       priority_score: 0,
       position: layoutChild(updatedNode, newNodes.length, result.follow_up_questions.length),
+      operationalized_question: null,
+      resolution_criteria: null,
+      resolution_date: null,
+      resolved_at: null,
+      resolved_as: null,
+      brier_score: null,
+      base_rate: null,
       created_at: now,
       updated_at: now,
       researched_at: null,

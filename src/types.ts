@@ -3,7 +3,7 @@
 export interface QuestionNode {
   id: string;
   question: string;
-  status: "open" | "researching" | "complete" | "stale";
+  status: "open" | "researching" | "complete" | "stale" | "resolved";
   probability: number; // 0-1, likelihood this outcome/event occurs
   confidence: number; // 0-1, how confident we are in our probability estimate
   summary: string | null; // Research findings
@@ -13,15 +13,29 @@ export interface QuestionNode {
   depth: number; // Distance from root
   priority_score: number; // Computed by prioritizer
   position: { x: number; y: number }; // Canvas position
+  operationalized_question: string | null;
+  resolution_criteria: string | null;
+  resolution_date: string | null;
+  resolved_at: string | null;
+  resolved_as: "yes" | "no" | "partial" | null;
+  brier_score: number | null;
+  base_rate: number | null;
   created_at: string;
   updated_at: string;
   researched_at: string | null;
 }
 
 export interface Evidence {
+  id: string;
   content: string;
   source: string | null;
   found_at: string;
+  content_hash: string;
+  created_at: string;
+  /** Number of nodes citing this evidence (populated on read) */
+  cited_by_count?: number;
+  /** Context for why this evidence is relevant to a specific node */
+  context?: string | null;
 }
 
 export interface Entity {
@@ -47,11 +61,18 @@ export interface Annotation {
   created_at: string;
 }
 
+/** Raw evidence from LLM before normalization into the evidence table */
+export interface RawEvidence {
+  content: string;
+  source: string | null;
+  found_at: string;
+}
+
 // ---- Engine Types ----
 
 export interface ResearchResult {
   summary: string;
-  evidence: Evidence[];
+  evidence: RawEvidence[];
   probability_estimate: number;
   confidence: number;
   follow_up_questions: {
@@ -173,13 +194,62 @@ export interface SynthesisResult {
   error?: string;
 }
 
+// ---- Belief History ----
+
+export interface BeliefUpdate {
+  timestamp: string;
+  probability: number;
+  confidence: number;
+  trigger: "research" | "critic" | "propagation" | "user" | "audit" | "resolution";
+  detail: string;
+}
+
+// ---- Calibration ----
+
+export interface CalibrationBin {
+  bin_start: number;
+  bin_end: number;
+  predicted_avg: number;
+  actual_rate: number;
+  count: number;
+  node_ids: string[];
+}
+
+export interface CalibrationData {
+  bins: CalibrationBin[];
+  overall_brier: number;
+  resolved_count: number;
+  timestamp: string;
+}
+
+// ---- Base Rate ----
+
+export interface BaseRateResult {
+  reference_class: string;
+  base_rate: number;
+  reasoning: string;
+  historical_examples: string[];
+  token_usage?: { input: number; output: number };
+}
+
+// ---- Operationalization ----
+
+export interface OperationalizationResult {
+  operationalized_question: string;
+  resolution_criteria: string;
+  resolution_date: string;
+  reasoning: string;
+  token_usage?: { input: number; output: number };
+}
+
 export interface PriorityFactors {
-  uncertainty: number; // High uncertainty = more value in researching
-  impact: number; // How many downstream nodes depend on this
-  novelty: number; // How unexplored is this branch
-  staleness: number; // Time since last research
-  user_interest: number; // Proximity to user annotations/nudges
-  depth_penalty: number; // Slight penalty for going too deep
+  uncertainty: number;
+  impact: number;
+  voi: number;
+  novelty: number;
+  staleness: number;
+  user_interest: number;
+  depth_penalty: number;
 }
 
 // ---- API Types ----

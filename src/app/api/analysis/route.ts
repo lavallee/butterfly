@@ -5,6 +5,7 @@ import { runConvergenceAnalysis } from "@/engine/analysis/convergence";
 import { runWhatIfAnalysis } from "@/engine/analysis/whatif";
 import { runTimelineAnalysis } from "@/engine/analysis/timeline";
 import { runMonteCarloSimulation } from "@/engine/analysis/montecarlo";
+import { computeAllVOI } from "@/engine/analysis/voi";
 
 function getStored(key: string): any | null {
   const json = getEngineState(`analysis_${key}`);
@@ -58,6 +59,11 @@ export async function POST(req: Request) {
         store("montecarlo", result);
         return NextResponse.json(result);
       }
+      case "voi": {
+        const result = computeAllVOI();
+        store("voi", result);
+        return NextResponse.json(result);
+      }
       default:
         return NextResponse.json(
           { error: `Unknown analysis type: ${type}` },
@@ -78,7 +84,7 @@ export async function GET(req: Request) {
   }
 
   // Return all available results
-  const types = ["sensitivity", "convergence", "whatif", "timeline", "montecarlo"];
+  const types = ["sensitivity", "convergence", "whatif", "timeline", "montecarlo", "voi"];
   const results: Record<string, any> = {};
   for (const t of types) {
     const stored = getStored(t);

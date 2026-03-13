@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-type AnalysisType = "sensitivity" | "convergence" | "whatif" | "timeline" | "montecarlo";
+type AnalysisType = "sensitivity" | "convergence" | "whatif" | "timeline" | "montecarlo" | "voi";
 
 interface Props {
   onClose: () => void;
@@ -15,6 +15,7 @@ const TABS: { key: AnalysisType; label: string; llm: boolean }[] = [
   { key: "whatif", label: "What-If", llm: false },
   { key: "timeline", label: "Timeline", llm: true },
   { key: "montecarlo", label: "Monte Carlo", llm: false },
+  { key: "voi", label: "Value of Info", llm: false },
 ];
 
 export default function AnalysisPanel({ onClose, onNodeFocus }: Props) {
@@ -227,6 +228,9 @@ export default function AnalysisPanel({ onClose, onNodeFocus }: Props) {
           )}
           {data && activeTab === "montecarlo" && (
             <MonteCarloView data={data} onNodeFocus={onNodeFocus} />
+          )}
+          {data && activeTab === "voi" && (
+            <VOIView data={data} onNodeFocus={onNodeFocus} />
           )}
         </div>
       </div>
@@ -581,6 +585,69 @@ function MonteCarloView({ data, onNodeFocus }: { data: any; onNodeFocus?: (id: s
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function VOIView({ data, onNodeFocus }: { data: any; onNodeFocus?: (id: string) => void }) {
+  const nodes = data.nodes || [];
+  const maxVOI = nodes[0]?.voi_score || 1;
+
+  return (
+    <div>
+      <SectionHeader>
+        Value of Information — which questions would reduce the most uncertainty if answered
+      </SectionHeader>
+      <div style={{ fontSize: 12, color: "#737373", marginBottom: 16 }}>
+        Current graph entropy: {data.current_graph_entropy?.toFixed(3) || "—"} bits
+      </div>
+      <table style={tableStyle}>
+        <thead>
+          <tr style={thRowStyle}>
+            <th style={thStyle}>Question</th>
+            <th style={{ ...thStyle, width: 80, textAlign: "right" }}>VOI Score</th>
+            <th style={{ ...thStyle, width: 90, textAlign: "right" }}>If Low (0.1)</th>
+            <th style={{ ...thStyle, width: 90, textAlign: "right" }}>If High (0.9)</th>
+            <th style={{ ...thStyle, width: 90, textAlign: "right" }}>Expected</th>
+          </tr>
+        </thead>
+        <tbody>
+          {nodes.slice(0, 25).map((n: any) => (
+            <tr
+              key={n.node_id}
+              style={{ ...trStyle, cursor: "pointer" }}
+              onClick={() => onNodeFocus?.(n.node_id)}
+            >
+              <td style={tdStyle}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div
+                    style={{
+                      width: 4,
+                      height: 24,
+                      borderRadius: 2,
+                      background: `rgba(59, 130, 246, ${Math.min(n.voi_score / maxVOI, 1)})`,
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span>{n.question.length > 80 ? n.question.slice(0, 80) + "..." : n.question}</span>
+                </div>
+              </td>
+              <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600, color: "#3b82f6" }}>
+                {n.voi_score.toFixed(3)}
+              </td>
+              <td style={{ ...tdStyle, textAlign: "right", color: "#ef4444" }}>
+                -{n.entropy_reduction_low.toFixed(3)}
+              </td>
+              <td style={{ ...tdStyle, textAlign: "right", color: "#22c55e" }}>
+                -{n.entropy_reduction_high.toFixed(3)}
+              </td>
+              <td style={{ ...tdStyle, textAlign: "right" }}>
+                -{n.expected_entropy_reduction.toFixed(3)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

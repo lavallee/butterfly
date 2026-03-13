@@ -4,11 +4,12 @@ import { memo, useState } from "react";
 import { Handle, Position, type NodeProps } from "reactflow";
 import type { QuestionNode as QNode } from "@/types";
 
-const STATUS_COLORS = {
+const STATUS_COLORS: Record<string, string> = {
   open: "#525252",
   researching: "#3b82f6",
   complete: "#22c55e",
   stale: "#eab308",
+  resolved: "#ec4899",
 };
 
 function probabilityColor(p: number): string {
