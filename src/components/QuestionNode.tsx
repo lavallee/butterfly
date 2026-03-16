@@ -1,8 +1,12 @@
 "use client";
 
 import { memo, useState } from "react";
-import { Handle, Position, type NodeProps } from "reactflow";
+import { Handle, Position, type NodeProps, useStore } from "reactflow";
 import type { QuestionNode as QNode } from "@/types";
+
+// Exported so Canvas and other components can share thresholds
+export const ZOOM_TIER_DOT = 0.35;
+export const ZOOM_TIER_COMPACT = 0.7;
 
 const STATUS_COLORS: Record<string, string> = {
   open: "#525252",
@@ -20,10 +24,86 @@ function probabilityColor(p: number): string {
 
 function QuestionNodeComponent({ data }: NodeProps<QNode>) {
   const [expanded, setExpanded] = useState(false);
+  const zoom = useStore((s) => s.transform[2]);
 
   const statusColor = STATUS_COLORS[data.status] || "#525252";
   const pColor = probabilityColor(data.probability);
+  const dimmed = (data as any)._dimmed;
+  const collapsedCount = (data as any)._collapsedChildren as number | undefined;
 
+  // ---- DOT tier ----
+  if (zoom < ZOOM_TIER_DOT) {
+    const size = 10 + data.probability * 12;
+    return (
+      <div
+        style={{
+          width: size,
+          height: size,
+          borderRadius: "50%",
+          background: statusColor,
+          opacity: dimmed ? 0.15 : 0.9,
+          boxShadow: data.status === "researching" ? `0 0 8px ${statusColor}` : undefined,
+          position: "relative",
+        }}
+      >
+        <Handle type="target" position={Position.Top} style={{ opacity: 0, top: 0 }} />
+        <Handle type="source" position={Position.Bottom} style={{ opacity: 0, bottom: 0 }} />
+        {collapsedCount != null && collapsedCount > 0 && (
+          <div style={{
+            position: "absolute", top: -6, right: -8,
+            background: "#3b82f6", color: "#fff",
+            fontSize: 7, fontWeight: 700,
+            borderRadius: 6, padding: "0 3px",
+            lineHeight: "12px",
+          }}>
+            +{collapsedCount}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ---- COMPACT tier ----
+  if (zoom < ZOOM_TIER_COMPACT) {
+    const label = data.question.length > 40 ? data.question.slice(0, 38) + "…" : data.question;
+    return (
+      <div
+        style={{
+          background: "#171717",
+          borderLeft: `3px solid ${statusColor}`,
+          borderRadius: 6,
+          padding: "4px 10px",
+          width: 200,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          opacity: dimmed ? 0.15 : 1,
+        }}
+      >
+        <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
+        <span style={{ fontSize: 10, color: "#d4d4d4", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+          {label}
+        </span>
+        <span style={{ fontSize: 10, color: pColor, fontWeight: 600, flexShrink: 0 }}>
+          {(data.probability * 100).toFixed(0)}%
+        </span>
+        {collapsedCount != null && collapsedCount > 0 && (
+          <span style={{
+            background: "#3b82f6", color: "#fff",
+            fontSize: 8, fontWeight: 700,
+            borderRadius: 6, padding: "0 4px",
+            lineHeight: "14px", flexShrink: 0,
+          }}>
+            +{collapsedCount}
+          </span>
+        )}
+        <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
+      </div>
+    );
+  }
+
+  // ---- FULL tier ----
   return (
     <div
       className="group"
@@ -40,6 +120,7 @@ function QuestionNodeComponent({ data }: NodeProps<QNode>) {
           data.status === "researching"
             ? `0 0 20px ${statusColor}40`
             : "none",
+        opacity: dimmed ? 0.15 : 1,
       }}
       onClick={() => setExpanded(!expanded)}
     >
@@ -85,6 +166,22 @@ function QuestionNodeComponent({ data }: NodeProps<QNode>) {
       >
         {data.question}
       </div>
+
+      {/* Collapsed children badge */}
+      {collapsedCount != null && collapsedCount > 0 && (
+        <div style={{
+          marginTop: 8,
+          fontSize: 10,
+          color: "#93c5fd",
+          background: "#1e3a5f",
+          border: "1px solid #3b82f630",
+          borderRadius: 4,
+          padding: "2px 8px",
+          display: "inline-block",
+        }}>
+          +{collapsedCount} collapsed
+        </div>
+      )}
 
       {/* Priority score */}
       {data.priority_score > 0 && data.status === "open" && (

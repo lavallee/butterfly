@@ -8,6 +8,7 @@ import ReactFlow, {
   useNodesState,
   useEdgesState,
   useReactFlow,
+  useStore,
   ReactFlowProvider,
   type Node,
   type Edge as FlowEdge,
@@ -17,17 +18,18 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import dagre from "dagre";
 
-import QuestionNodeComponent from "./QuestionNode";
+import QuestionNodeComponent, { ZOOM_TIER_DOT, ZOOM_TIER_COMPACT } from "./QuestionNode";
 import AnnotationNodeComponent from "./AnnotationNode";
 import EvidencePanel from "./EvidencePanel";
 import ActivityLog from "./ActivityLog";
 import BriefingPanel from "./BriefingPanel";
 import AnalysisPanel from "./AnalysisPanel";
 import CalibrationPanel from "./CalibrationPanel";
+import FilterBar from "./FilterBar";
 import type {
   GraphState,
   QuestionNode,
-  Annotation,
+  Edge as GraphEdge,
   EngineStatus,
   SynthesisResult,
 } from "@/types";
@@ -84,6 +86,24 @@ function layoutWithDagre(
   });
 }
 
+/**
+ * Collect all transitive descendants of a node via edges.
+ */
+function getDescendants(nodeId: string, edges: GraphEdge[]): Set<string> {
+  const visited = new Set<string>();
+  const queue = [nodeId];
+  while (queue.length > 0) {
+    const current = queue.pop()!;
+    for (const edge of edges) {
+      if (edge.source_id === current && !visited.has(edge.target_id)) {
+        visited.add(edge.target_id);
+        queue.push(edge.target_id);
+      }
+    }
+  }
+  return visited;
+}
+
 function CanvasInner() {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -98,17 +118,29 @@ function CanvasInner() {
   const [briefingOpen, setBriefingOpen] = useState(false);
   const [analysisOpen, setAnalysisOpen] = useState(false);
   const [calibrationOpen, setCalibrationOpen] = useState(false);
+  const [collapsedNodeIds, setCollapsedNodeIds] = useState<Set<string>>(new Set());
+  const [filterPredicate, setFilterPredicate] = useState<((node: QuestionNode) => boolean) | null>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
   const prevNodeCountRef = useRef(0);
   const stopRef = useRef(false);
+  const graphRef = useRef<GraphState | null>(null);
   const { fitView, setCenter } = useReactFlow();
+  const zoom = useStore((s) => s.transform[2]);
+
+  // Rebuild flow nodes/edges when zoom, selection, collapse, or filter changes
+  useEffect(() => {
+    if (graphRef.current) {
+      buildFlowGraph(graphRef.current, false);
+    }
+  }, [zoom, selectedNode?.id, collapsedNodeIds, filterPredicate]);
 
   // Fetch graph state
   const fetchGraph = useCallback(async () => {
     try {
       const res = await fetch("/api/graph");
       const graph: GraphState = await res.json();
-      applyGraph(graph);
+      graphRef.current = graph;
+      buildFlowGraph(graph, true);
     } catch (err) {
       console.error("Failed to fetch graph:", err);
     }
@@ -124,44 +156,130 @@ function CanvasInner() {
   }, []);
 
   // Convert graph state to React Flow nodes/edges
-  const applyGraph = useCallback(
-    (graph: GraphState) => {
+  const buildFlowGraph = useCallback(
+    (graph: GraphState, isNewData: boolean) => {
+      // Compute which nodes are hidden by collapse
+      const hiddenByCollapse = new Set<string>();
+      for (const collapsedId of collapsedNodeIds) {
+        const descendants = getDescendants(collapsedId, graph.edges);
+        for (const d of descendants) {
+          // Don't hide if this descendant is itself a collapsed node
+          // (it should show as a collapsed node)
+          if (!collapsedNodeIds.has(d)) {
+            hiddenByCollapse.add(d);
+          }
+        }
+      }
+
+      // Count collapsed children for badge display
+      const collapsedChildCounts = new Map<string, number>();
+      for (const collapsedId of collapsedNodeIds) {
+        const descendants = getDescendants(collapsedId, graph.edges);
+        collapsedChildCounts.set(collapsedId, descendants.size);
+      }
+
+      // Visible node IDs (not hidden by collapse)
+      const visibleNodeIds = new Set(
+        graph.nodes.filter((n) => !hiddenByCollapse.has(n.id)).map((n) => n.id)
+      );
+
       let flowNodes: Node[] = [
-        ...graph.nodes.map((n) => ({
-          id: n.id,
-          type: "question" as const,
-          position: n.position,
-          data: n,
-          draggable: true,
-        })),
-        ...graph.annotations.map((a) => ({
-          id: a.id,
-          type: "annotation" as const,
-          position: a.position,
-          data: a,
-          draggable: true,
-        })),
+        ...graph.nodes
+          .filter((n) => visibleNodeIds.has(n.id))
+          .map((n) => {
+            const dimmed = filterPredicate ? !filterPredicate(n) : false;
+            return {
+              id: n.id,
+              type: "question" as const,
+              position: n.position,
+              data: {
+                ...n,
+                _dimmed: dimmed,
+                _collapsedChildren: collapsedChildCounts.get(n.id) || 0,
+              },
+              draggable: true,
+            };
+          }),
+        ...graph.annotations
+          .filter(() => zoom > 0.4) // hide annotations at low zoom
+          .map((a) => ({
+            id: a.id,
+            type: "annotation" as const,
+            position: a.position,
+            data: a,
+            draggable: true,
+          })),
       ];
 
-      const flowEdges: FlowEdge[] = graph.edges.map((e) => ({
-        id: e.id,
-        source: e.source_id,
-        target: e.target_id,
-        animated: e.relationship === "causes",
-        style: {
-          stroke: EDGE_COLORS[e.relationship] || "#404040",
-          strokeWidth: Math.max(1, e.strength * 3),
-        },
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: EDGE_COLORS[e.relationship] || "#404040",
-          width: 16,
-          height: 16,
-        },
-        label: e.relationship,
-        labelStyle: { fontSize: 10, fill: "#525252" },
-        labelBgStyle: { fill: "#0a0a0a", fillOpacity: 0.8 },
-      }));
+      // Build edges — only between visible nodes
+      const selectedId = selectedNode?.id || null;
+      const selectedEdgeIds = new Set<string>();
+
+      // Collect edges connected to selected node
+      if (selectedId) {
+        for (const e of graph.edges) {
+          if (e.source_id === selectedId || e.target_id === selectedId) {
+            selectedEdgeIds.add(e.id);
+          }
+        }
+      }
+
+      const flowEdges: FlowEdge[] = graph.edges
+        .filter((e) => visibleNodeIds.has(e.source_id) && visibleNodeIds.has(e.target_id))
+        .map((e) => {
+          const baseColor = EDGE_COLORS[e.relationship] || "#404040";
+          const isSelectedEdge = selectedEdgeIds.has(e.id);
+          const hasSelection = selectedId !== null;
+
+          // Edge declutter based on zoom and selection
+          let opacity = 1;
+          let strokeWidth = Math.max(1, e.strength * 3);
+          let showLabel = true;
+          let animated = e.relationship === "causes";
+
+          if (zoom < ZOOM_TIER_DOT) {
+            opacity = hasSelection ? (isSelectedEdge ? 0.8 : 0.08) : 0.25;
+            strokeWidth = 1;
+            showLabel = false;
+            animated = false;
+          } else if (zoom < ZOOM_TIER_COMPACT) {
+            opacity = hasSelection ? (isSelectedEdge ? 0.9 : 0.12) : 0.5;
+            showLabel = false;
+            animated = false;
+          } else if (hasSelection) {
+            opacity = isSelectedEdge ? 1 : 0.15;
+          }
+
+          // Dim edges connected to filtered-out nodes
+          if (filterPredicate) {
+            const sourceNode = graph.nodes.find((n) => n.id === e.source_id);
+            const targetNode = graph.nodes.find((n) => n.id === e.target_id);
+            if (sourceNode && !filterPredicate(sourceNode) || targetNode && !filterPredicate(targetNode)) {
+              opacity = Math.min(opacity, 0.1);
+            }
+          }
+
+          return {
+            id: e.id,
+            source: e.source_id,
+            target: e.target_id,
+            animated,
+            style: {
+              stroke: baseColor,
+              strokeWidth,
+              opacity,
+            },
+            markerEnd: {
+              type: MarkerType.ArrowClosed,
+              color: baseColor,
+              width: 16,
+              height: 16,
+            },
+            label: showLabel ? e.relationship : undefined,
+            labelStyle: showLabel ? { fontSize: 10, fill: "#525252" } : undefined,
+            labelBgStyle: showLabel ? { fill: "#0a0a0a", fillOpacity: 0.8 } : undefined,
+          };
+        });
 
       // Auto-layout with dagre
       if (autoLayout && flowNodes.length > 0) {
@@ -174,12 +292,12 @@ function CanvasInner() {
       setNodes(flowNodes);
       setEdges(flowEdges);
 
-      // Fit view when new nodes appear
-      if (nodeCountChanged) {
+      // Fit view when new data arrives and node count changed
+      if (isNewData && nodeCountChanged) {
         setTimeout(() => fitView({ padding: 0.15, duration: 300 }), 50);
       }
     },
-    [setNodes, setEdges, autoLayout, fitView]
+    [setNodes, setEdges, autoLayout, fitView, zoom, selectedNode?.id, collapsedNodeIds, filterPredicate]
   );
 
   // Initial load
@@ -263,6 +381,20 @@ function CanvasInner() {
     }
   }, []);
 
+  // Double-click → toggle collapse
+  const handleNodeDoubleClick = useCallback((_: any, node: Node) => {
+    if (node.type !== "question") return;
+    setCollapsedNodeIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(node.id)) {
+        next.delete(node.id);
+      } else {
+        next.add(node.id);
+      }
+      return next;
+    });
+  }, []);
+
   // Focus a node from activity log
   const handleNodeFocus = useCallback(
     (nodeId: string) => {
@@ -336,7 +468,6 @@ function CanvasInner() {
     });
     const data = await res.json();
     await fetchGraph();
-    // Update local synthesis result to clear proposed edges (prevent double-apply)
     setSynthesisResult((prev) =>
       prev ? { ...prev, proposed_edges: [], _edgesApplied: data.applied } as any : prev
     );
@@ -350,7 +481,6 @@ function CanvasInner() {
     });
     const data = await res.json();
     await fetchGraph();
-    // Update local synthesis result to mark adjustments applied
     setSynthesisResult((prev) =>
       prev ? { ...prev, _adjustmentsApplied: data.adjusted } as any : prev
     );
@@ -392,6 +522,11 @@ function CanvasInner() {
       ? Math.max(...questionNodes.map((n) => (n.data as QuestionNode).depth))
       : 0,
   };
+
+  // Max depth from full graph (for filter bar, not just visible nodes)
+  const fullMaxDepth = graphRef.current
+    ? Math.max(...graphRef.current.nodes.map((n) => n.depth), 0)
+    : stats.maxDepth;
 
   return (
     <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
@@ -445,6 +580,18 @@ function CanvasInner() {
         >
           Auto Layout
         </button>
+        <FilterBar
+          maxDepth={fullMaxDepth}
+          onChange={setFilterPredicate}
+        />
+        {collapsedNodeIds.size > 0 && (
+          <button
+            onClick={() => setCollapsedNodeIds(new Set())}
+            style={btnWarnStyle}
+          >
+            Expand All ({collapsedNodeIds.size})
+          </button>
+        )}
         <div style={{ width: 1, height: 20, background: "#333", margin: "0 4px" }} />
         <button
           onClick={handleSynthesize}
@@ -566,6 +713,7 @@ function CanvasInner() {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
+        onNodeDoubleClick={handleNodeDoubleClick}
         onNodeDragStop={handleNodeDragStop}
         nodeTypes={nodeTypes}
         fitView
@@ -586,6 +734,7 @@ function CanvasInner() {
             const data = n.data as QuestionNode;
             if (data.status === "complete") return "#22c55e";
             if (data.status === "researching") return "#3b82f6";
+            if (data.status === "resolved") return "#ec4899";
             return "#525252";
           }}
           maskColor="#0a0a0a80"
